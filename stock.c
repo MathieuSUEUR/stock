@@ -7,8 +7,6 @@
 #define MAX_ALERTS 3
 #define MIN_STOCK 2
 #define BUFF_SIZE 256
-
-
 typedef struct Product {
     char type; int volume;
     struct Product* next;
