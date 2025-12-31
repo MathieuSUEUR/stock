@@ -3,11 +3,14 @@
 #include <string.h>
 #include <ctype.h>
 
+/* CONSTANTES ET MACROS */
 #define MAX_ALERTS 3
 #define MIN_STOCK 2
 #define BUFF_SIZE 256
-#define MAX_CMD_ITEMS 50 // Sécurité pour le tableau temporaire
+#define MAX_CMD_ITEMS 50
+#define MSG_SIZE 20  /* Correction "Magic Number" */
 
+/* STRUCTURES */
 typedef struct Product {
     char type; 
     int volume;
@@ -15,22 +18,34 @@ typedef struct Product {
 } Product;
 
 typedef struct {
-    char message[20];
+    char message[MSG_SIZE];
     int active;
 } AlertLog;
 
-/* --- Variables globales --- */
-Product* stock_head = NULL;
-AlertLog alert_system[MAX_ALERTS];
-int alert_index = 0;
+/* VARIABLES GLOBALES (STATIC pour limiter la portée - Correction Embold) */
+static Product* stock_head = NULL;
+static AlertLog alert_system[MAX_ALERTS];
+static int alert_index = 0;
 
-/* --- Fonctions Utilitaires --- */
+/* --- GESTION MEMOIRE & UTILITAIRES --- */
 
-Product* create_node(char type, int volume) {
+/* Correction : Fonction pour libérer toute la mémoire à la fin */
+static void Nettoyer_Memoire() {
+    Product* current = stock_head;
+    Product* next_node;
+    while (current != NULL) {
+        next_node = current->next;
+        free(current);
+        current = next_node;
+    }
+    stock_head = NULL;
+}
+
+static Product* create_node(char type, int volume) {
     Product* new_p = (Product*)malloc(sizeof(Product));
-    // SÉCURITÉ : Vérification de l'allocation mémoire
     if (new_p == NULL) {
         fprintf(stderr, "Erreur critique : Memoire insuffisante.\n");
+        /* En cas de crash, on essaie de nettoyer si possible, ou on quitte */
         exit(EXIT_FAILURE);
     }
     new_p->type = type; 
@@ -39,52 +54,44 @@ Product* create_node(char type, int volume) {
     return new_p;
 }
 
-void unlink_node(Product* prev, Product* curr) {
+static void unlink_node(Product* prev, Product* curr) {
     if (prev) prev->next = curr->next;
     else stock_head = curr->next;
     curr->next = NULL;
 }
 
-/* SERVICE : GESTION DES ALERTES (MONITORING)
-   Stratégie : Buffer Circulaire (On écrase les vieilles alertes si plein)
-   [cite_start][cite: 50, 134]
-*/
+/* --- SERVICE : ALERTES --- */
 
-void Enregistrer_Alerte(char type, int volume) {
-    snprintf(alert_system[alert_index].message, 20, "%c%d", type, volume);
+static void Enregistrer_Alerte(char type, int volume) {
+    /* Utilisation de MSG_SIZE au lieu de 20 */
+    snprintf(alert_system[alert_index].message, MSG_SIZE, "%c%d", type, volume);
     alert_system[alert_index].active = 1;
     printf(">> ALARME : Stock faible %s\n", alert_system[alert_index].message);
     
-    // Rotation du buffer circulaire
     alert_index = (alert_index + 1) % MAX_ALERTS; 
 }
 
-int count_stock(char type, int volume); // Prototype
+/* Prototype nécessaire pour la récursion croisée */
+static int count_stock(char type, int volume); 
 
-void Verifier_Seuil(char type, int volume) {
-    [cite_start]// [cite: 77, 145]
+static void Verifier_Seuil(char type, int volume) {
     if (count_stock(type, volume) < MIN_STOCK) 
         Enregistrer_Alerte(type, volume);
 }
 
-void Afficher_Une_Alerte(int i) {
-    int idx = (alert_index + i) % MAX_ALERTS;
-    if (alert_system[idx].active)
-        printf("[Alert] Rupture : %s\n", alert_system[idx].message);
-}
-
-void Afficher_Log_Alertes() {
+static void Afficher_Log_Alertes() {
     printf("\n--- LOG ALERTES ---\n");
-    [cite_start]// [cite: 79]
-    for (int i = 0; i < MAX_ALERTS; i++) Afficher_Une_Alerte(i);
+    for (int i = 0; i < MAX_ALERTS; i++) {
+        int idx = (alert_index + i) % MAX_ALERTS;
+        if (alert_system[idx].active)
+            printf("[Alert] Rupture : %s\n", alert_system[idx].message);
+    }
     printf("-------------------\n");
 }
 
-/* SERVICE : GESTION DES ENTRÉES (APPROVISIONNEMENT)
-   [cite_start][cite: 61]
-*/
+/* --- SERVICE : ENTREES --- */
 
-int count_stock(char type, int volume) {
+static int count_stock(char type, int volume) {
     int count = 0;
     Product* cur = stock_head;
     while (cur) {
@@ -94,23 +101,33 @@ int count_stock(char type, int volume) {
     return count;
 }
 
-void Saisir_Produit_Unitaire(char type, int volume) {
+static void Saisir_Produit_Unitaire(char type, int volume) {
     Product* new_p = create_node(type, volume);
-    // Insertion en queue pour respecter l'ordre d'arrivée (FIFO)
-    if (!stock_head) stock_head = new_p;
-    else {
+    
+    if (!stock_head) {
+        stock_head = new_p;
+    } else {
         Product* cur = stock_head;
         while (cur->next) cur = cur->next;
         cur->next = new_p;
     }
 }
 
-void Traiter_Token_Ajout(char* token) {
-    if (strlen(token) >= 2)
-        Saisir_Produit_Unitaire(toupper(token[0]), atoi(&token[1]));
+static void Traiter_Token_Ajout(char* token) {
+    if (strlen(token) >= 2) {
+        /* Correction : strtol est plus sûr que atoi */
+        char* endptr;
+        int vol = (int)strtol(&token[1], &endptr, 10);
+        
+        /* Vérification basique que le volume est valide */
+        if (vol > 0) {
+            Saisir_Produit_Unitaire(toupper((unsigned char)token[0]), vol);
+        }
+    }
 }
 
-void Importer_Paquet_Rapide(char* str) {
+static void Importer_Paquet_Rapide(char* str) {
+    /* Note: strtok modifie la chaîne d'origine, c'est acceptable ici */
     char* token = strtok(str, ", ");
     while (token) {
         Traiter_Token_Ajout(token);
@@ -119,15 +136,11 @@ void Importer_Paquet_Rapide(char* str) {
     printf("Succes : Ajout termine.\n");
 }
 
-/* SERVICE : GESTION DES SORTIES (ASSEMBLAGE COLIS)
-   Logique : FIFO pour le stock, LIFO trié pour le colis
-   [cite_start][cite: 88, 92]
-*/
+/* --- SERVICE : SORTIES --- */
 
-Product* find_fifo(char t, int v, Product** prev_out) {
+static Product* find_fifo(char t, int v, Product** prev_out) {
     Product *cur = stock_head, *prev = NULL;
     while (cur) {
-        // On cherche le premier correspondant (le plus ancien)
         if (cur->type == t && cur->volume == v) {
             *prev_out = prev; 
             return cur;
@@ -138,68 +151,72 @@ Product* find_fifo(char t, int v, Product** prev_out) {
     return NULL;
 }
 
-Product* Extraire_Du_Stock(char t, int v) {
-    Product *prev = NULL, *target = find_fifo(t, v, &prev);
+static Product* Extraire_Du_Stock(char t, int v) {
+    Product *prev = NULL;
+    Product *target = find_fifo(t, v, &prev);
+    
     if (target) {
         unlink_node(prev, target);
-        Verifier_Seuil(t, v); // Vérification après retrait
+        Verifier_Seuil(t, v);
         return target;
     }
     return NULL;
 }
 
-Product* Gerer_Rupture(char t, int v) {
+static Product* Gerer_Rupture(char t, int v) {
     Product* p = Extraire_Du_Stock(t, v);
     if (!p) {
         printf("!! RUPTURE !! %c%d -> Backorder.\n", t, v);
-        [cite_start]// En cas de rupture, on génère une alerte [cite: 45]
         Enregistrer_Alerte(t, v);
     }
     return p;
 }
 
-void Swap_Ptr(Product** a, Product** b) {
-    Product* temp = *a; *a = *b; *b = temp;
+static void Swap_Ptr(Product** a, Product** b) {
+    Product* temp = *a; 
+    *a = *b; 
+    *b = temp;
 }
 
-void Trier_Buffer_Decroissant(Product** items, int count) {
-    // Tri pour mettre les petits volumes en fin de tableau (Haut du colis)
-    for (int i = 0; i < count - 1; i++)
-        for (int j = 0; j < count - i - 1; j++)
-            if (items[j]->volume < items[j+1]->volume)
+static void Assembler_Colis(Product** items, int count) {
+    /* Tri à bulles : Plus petits volumes vers la fin du tableau */
+    for (int i = 0; i < count - 1; i++) {
+        for (int j = 0; j < count - i - 1; j++) {
+            if (items[j]->volume < items[j+1]->volume) {
                 Swap_Ptr(&items[j], &items[j+1]);
-}
+            }
+        }
+    }
 
-void Empiler_Et_Afficher(Product** items, int count) {
+    /* Affichage LIFO (Haut = Fin du tableau) */
     printf("\n--- COLIS (Haut -> Fond) ---\n");
-    // BUG CORRIGÉ : boucle jusqu'à >= 0 pour inclure le dernier élément
     for (int i = count - 1; i >= 0; i--) {
         printf("| Haut : Type %c | Vol %d |\n", items[i]->type, items[i]->volume);
-        free(items[i]); // Libération mémoire
+        free(items[i]); /* Libération impérative ici */
     }
     printf("| Fond --------------------|\n");
 }
 
-void Assembler_Colis(Product** items, int count) {
-    Trier_Buffer_Decroissant(items, count);
-    Empiler_Et_Afficher(items, count);
-}
-
-void Traiter_Commande(char* cmd) {
+static void Traiter_Commande(char* cmd) {
     Product* tmp[MAX_CMD_ITEMS]; 
     int cnt = 0;
     char* token = strtok(cmd, ", ");
     
     while (token) {
         if (strlen(token) >= 2) {
-            // SÉCURITÉ : Protection contre le Buffer Overflow
             if (cnt >= MAX_CMD_ITEMS) {
-                printf("! Attention : Commande tronquée (max %d items)\n", MAX_CMD_ITEMS);
+                printf("! Commande tronquee (max %d)\n", MAX_CMD_ITEMS);
                 break; 
             }
             
-            Product* p = Gerer_Rupture(toupper(token[0]), atoi(&token[1]));
-            if (p) tmp[cnt++] = p;
+            char* endptr;
+            int vol = (int)strtol(&token[1], &endptr, 10);
+            
+            if (vol > 0) {
+                /* Cast unsigned char pour toupper pour éviter bugs d'index négatifs */
+                Product* p = Gerer_Rupture(toupper((unsigned char)token[0]), vol);
+                if (p) tmp[cnt++] = p;
+            }
         }
         token = strtok(NULL, ", ");
     }
@@ -208,39 +225,58 @@ void Traiter_Commande(char* cmd) {
 
 /* --- MAIN --- */
 
-void Demo_Init() {
-    Saisir_Produit_Unitaire('A', 1); Saisir_Produit_Unitaire('B', 2);
-    Saisir_Produit_Unitaire('C', 10); Saisir_Produit_Unitaire('A', 3);
+static void Demo_Init() {
+    Saisir_Produit_Unitaire('A', 1); 
+    Saisir_Produit_Unitaire('B', 2);
+    Saisir_Produit_Unitaire('C', 10); 
+    Saisir_Produit_Unitaire('A', 3);
 }
 
-void Menu_Action(int choice, char* buf) {
-    if (choice == 3) { Afficher_Log_Alertes(); return; }
+static void Menu_Action(int choice, char* buf) {
+    if (choice == 3) { 
+        Afficher_Log_Alertes(); 
+        return; 
+    }
     
     printf("Saisie (ex: A1, B2): ");
-    fgets(buf, BUFF_SIZE, stdin);
-    buf[strcspn(buf, "\n")] = 0; // Suppression du saut de ligne
+    if (fgets(buf, BUFF_SIZE, stdin) != NULL) {
+        buf[strcspn(buf, "\n")] = 0;
 
-    if (choice == 1) Importer_Paquet_Rapide(buf);
-    else if (choice == 2) Traiter_Commande(buf);
+        if (choice == 1) Importer_Paquet_Rapide(buf);
+        else if (choice == 2) Traiter_Commande(buf);
+    }
 }
 
 int main() {
     int c = 0; 
     char buf[BUFF_SIZE];
     
+    /* Initialisation sécurisée du buffer */
+    memset(buf, 0, BUFF_SIZE);
+
     Demo_Init();
-    printf("=== GESTION DE STOCK 2025 ===\n");
+    printf("=== GESTION DE STOCK 2025 (Clean) ===\n");
     
     do {
         printf("\n1.Ajout 2.Colis 3.Alertes 0.Fin\nChoix: ");
-        if(scanf("%d", &c) && c != 0) {
-            // SÉCURITÉ : Vider correctement le buffer clavier
+        if(scanf("%d", &c) == 1 && c != 0) {
+            /* Vider le buffer clavier proprement */
             int ch;
             while ((ch = getchar()) != '\n' && ch != EOF);
             
             Menu_Action(c, buf);
+        } else {
+             /* Si scanf échoue (ex: lettre tapée), on vide le buffer pour éviter boucle infinie */
+             if (c != 0) {
+                 int ch;
+                 while ((ch = getchar()) != '\n' && ch != EOF);
+             }
         }
     } while (c != 0);
+    
+    /* NETTOYAGE FINAL (Important pour Embold) */
+    printf("Arrêt du système. Nettoyage mémoire...\n");
+    Nettoyer_Memoire();
     
     return 0;
 }
