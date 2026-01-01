@@ -3,13 +3,13 @@
 #include <string.h>
 #include <ctype.h>
 
-/* --- CONSTANTES (Pour éviter les "Magic Numbers") --- */
+/* --- CONSTANTES --- */
 #define MAX_ALERTS 3
 #define MIN_STOCK 2
 #define BUFF_SIZE 256
 #define MAX_CMD_ITEMS 50
 #define MSG_SIZE 20
-#define BASE_DEC 10  /* Base décimale pour strtol */
+#define BASE_DEC 10
 
 /* --- STRUCTURES --- */
 typedef struct Product {
@@ -23,7 +23,7 @@ typedef struct {
     int active;
 } AlertLog;
 
-/* --- VARIABLES GLOBALES (Static pour l'encapsulation) --- */
+/* --- VARIABLES GLOBALES --- */
 static Product* stock_head = NULL;
 static AlertLog alert_system[MAX_ALERTS];
 static int alert_index = 0;
@@ -32,9 +32,8 @@ static int alert_index = 0;
 
 static void Nettoyer_Memoire(void) {
     Product* current = stock_head;
-    Product* next_node = NULL;
     while (current != NULL) {
-        next_node = current->next;
+        Product* next_node = current->next;
         free(current);
         current = next_node;
     }
@@ -42,45 +41,33 @@ static void Nettoyer_Memoire(void) {
 }
 
 static Product* create_node(char type, int volume) {
-    /* CORRECTION VULN 3 : calloc met la mémoire à zéro (plus sûr que malloc) */
     Product* new_p = (Product*)calloc(1, sizeof(Product));
-    
     if (new_p == NULL) {
         (void)fprintf(stderr, "Erreur critique : Memoire insuffisante.\n");
         exit(EXIT_FAILURE);
     }
     new_p->type = type; 
     new_p->volume = volume; 
-    new_p->next = NULL;
     return new_p;
 }
 
 static void unlink_node(Product* prev, Product* curr) {
-    if (prev) {
-        prev->next = curr->next;
-    } else {
-        stock_head = curr->next;
-    }
+    if (prev) prev->next = curr->next;
+    else stock_head = curr->next;
     curr->next = NULL;
 }
 
 /* --- SERVICE : ALERTES --- */
 
 static void Enregistrer_Alerte(char type, int volume) {
-    /* Sécurisation de la chaîne formatée */
     (void)snprintf(alert_system[alert_index].message, MSG_SIZE, "%c%d", type, volume);
-    
-    /* Garantie de la terminaison nulle (Paranoïa pour analyseurs statiques) */
     alert_system[alert_index].message[MSG_SIZE - 1] = '\0';
-    
     alert_system[alert_index].active = 1;
     (void)printf(">> ALARME : Stock faible %s\n", alert_system[alert_index].message);
-    
     alert_index = (alert_index + 1) % MAX_ALERTS; 
 }
 
-/* Prototype */
-static int count_stock(char type, int volume); 
+static int count_stock(char type, int volume); /* Proto */
 
 static void Verifier_Seuil(char type, int volume) {
     if (count_stock(type, volume) < MIN_STOCK) {
@@ -102,74 +89,56 @@ static void Afficher_Log_Alertes(void) {
 
 /* --- SERVICE : ENTREES --- */
 
-/* CORRECTION CODE ISSUE : 'const' ajouté car on ne modifie pas les données */
 static int count_stock(char type, int volume) {
     int count = 0;
     const Product* cur = stock_head;
     while (cur) {
-        if (cur->type == type && cur->volume == volume) {
-            count++;
-        }
+        if (cur->type == type && cur->volume == volume) count++;
         cur = cur->next;
     }
     return count;
 }
 
-static void Saisir_Produit_Unitaire(char type, int volume) {
-    Product* new_p = create_node(type, volume);
-    
+static void Ajouter_En_Queue(Product* new_p) {
     if (!stock_head) {
         stock_head = new_p;
     } else {
         Product* cur = stock_head;
-        while (cur->next) {
-            cur = cur->next;
-        }
+        while (cur->next) cur = cur->next;
         cur->next = new_p;
     }
 }
 
-/* Fonction auxiliaire pour parser un token (ex: "A1") */
-static void Traiter_Token_Brut(const char* token_start, size_t length) {
-    if (length >= 2) {
-        char type_char = token_start[0];
-        char* endptr = NULL;
-        /* On copie la partie nombre dans un buffer temporaire pour strtol */
-        char vol_buffer[16] = {0}; 
-        int volume = 0;
+static void Saisir_Produit_Unitaire(char type, int volume) {
+    Product* new_p = create_node(type, volume);
+    Ajouter_En_Queue(new_p);
+}
 
-        if (length - 1 < sizeof(vol_buffer)) {
-            memcpy(vol_buffer, &token_start[1], length - 1);
-            vol_buffer[length - 1] = '\0';
-            
-            volume = (int)strtol(vol_buffer, &endptr, BASE_DEC);
-
-            if (volume > 0) {
-                /* CORRECTION VULN 2 : Cast (unsigned char) pour toupper */
-                Saisir_Produit_Unitaire((char)toupper((unsigned char)type_char), volume);
-            }
-        }
+static void Convertir_Et_Ajouter(char type, const char* buffer) {
+    int volume = (int)strtol(buffer, NULL, BASE_DEC);
+    if (volume > 0) {
+        Saisir_Produit_Unitaire((char)toupper((unsigned char)type), volume);
     }
 }
 
-/* CORRECTION VULN 1 : Remplacement de strtok par une boucle manuelle (Thread-safe) */
+static void Traiter_Token_Brut(const char* token_start, size_t length) {
+    char vol_buffer[16] = {0};
+    if (length >= 2 && length - 1 < sizeof(vol_buffer)) {
+        memcpy(vol_buffer, &token_start[1], length - 1);
+        vol_buffer[length - 1] = '\0';
+        Convertir_Et_Ajouter(token_start[0], vol_buffer);
+    }
+}
+
 static void Importer_Paquet_Rapide(const char* input_str) {
     const char* cursor = input_str;
     const char* delims = ", ";
-    
     while (*cursor != '\0') {
-        /* Sauter les délimiteurs au début */
         size_t span = strspn(cursor, delims);
         cursor += span;
-
         if (*cursor == '\0') break;
-
-        /* Trouver la fin du token */
         size_t token_len = strcspn(cursor, delims);
-        
-        /* Traiter le token */
         Traiter_Token_Brut(cursor, token_len);
-
         cursor += token_len;
     }
     (void)printf("Succes : Ajout termine.\n");
@@ -180,7 +149,6 @@ static void Importer_Paquet_Rapide(const char* input_str) {
 static Product* find_fifo(char t, int v, Product** prev_out) {
     Product *cur = stock_head;
     Product *prev = NULL;
-    
     while (cur) {
         if (cur->type == t && cur->volume == v) {
             *prev_out = prev; 
@@ -195,7 +163,6 @@ static Product* find_fifo(char t, int v, Product** prev_out) {
 static Product* Extraire_Du_Stock(char t, int v) {
     Product *prev = NULL;
     Product *target = find_fifo(t, v, &prev);
-    
     if (target) {
         unlink_node(prev, target);
         Verifier_Seuil(t, v);
@@ -219,10 +186,8 @@ static void Swap_Ptr(Product** a, Product** b) {
     *b = temp;
 }
 
-static void Assembler_Colis(Product** items, int count) {
+static void Trier_Items(Product** items, int count) {
     int i, j;
-    
-    /* Tri à bulles décroissant */
     for (i = 0; i < count - 1; i++) {
         for (j = 0; j < count - i - 1; j++) {
             if (items[j]->volume < items[j+1]->volume) {
@@ -230,7 +195,10 @@ static void Assembler_Colis(Product** items, int count) {
             }
         }
     }
+}
 
+static void Afficher_Et_Liberer_Colis(Product** items, int count) {
+    int i;
     (void)printf("\n--- COLIS (Haut -> Fond) ---\n");
     for (i = count - 1; i >= 0; i--) {
         (void)printf("| Haut : Type %c | Vol %d |\n", items[i]->type, items[i]->volume);
@@ -239,44 +207,45 @@ static void Assembler_Colis(Product** items, int count) {
     (void)printf("| Fond --------------------|\n");
 }
 
-/* Même logique de parsing manuel pour éviter strtok */
+static void Assembler_Colis(Product** items, int count) {
+    if (count > 0) {
+        Trier_Items(items, count);
+        Afficher_Et_Liberer_Colis(items, count);
+    }
+}
+
+static void Ajouter_Item_Cmd(Product* tmp[], int* cnt, char t, int v) {
+    if (*cnt < MAX_CMD_ITEMS) {
+        Product* p = Gerer_Rupture((char)toupper((unsigned char)t), v);
+        if (p) tmp[(*cnt)++] = p;
+    }
+}
+
+static void Parser_Item_Cmd(const char* cursor, size_t len, Product* tmp[], int* cnt) {
+    char vol_buf[16] = {0};
+    if (len >= 2 && len - 1 < sizeof(vol_buf)) {
+        memcpy(vol_buf, &cursor[1], len - 1);
+        int vol = (int)strtol(vol_buf, NULL, BASE_DEC);
+        if (vol > 0) Ajouter_Item_Cmd(tmp, cnt, cursor[0], vol);
+    }
+}
+
 static void Traiter_Commande(const char* cmd) {
     Product* tmp[MAX_CMD_ITEMS]; 
     int cnt = 0;
     const char* cursor = cmd;
     const char* delims = ", ";
-
     while (*cursor != '\0') {
-        size_t span = strspn(cursor, delims);
-        cursor += span;
+        cursor += strspn(cursor, delims);
         if (*cursor == '\0') break;
-
-        size_t token_len = strcspn(cursor, delims);
-        
-        /* Extraction locale pour commande */
-        if (token_len >= 2 && cnt < MAX_CMD_ITEMS) {
-             char type_char = cursor[0];
-             char vol_buffer[16] = {0};
-             if (token_len - 1 < sizeof(vol_buffer)) {
-                 memcpy(vol_buffer, &cursor[1], token_len - 1);
-                 vol_buffer[token_len - 1] = '\0';
-                 
-                 int vol = (int)strtol(vol_buffer, NULL, BASE_DEC);
-                 if (vol > 0) {
-                     Product* p = Gerer_Rupture((char)toupper((unsigned char)type_char), vol);
-                     if (p) tmp[cnt++] = p;
-                 }
-             }
-        }
-        cursor += token_len;
+        size_t len = strcspn(cursor, delims);
+        Parser_Item_Cmd(cursor, len, tmp, &cnt);
+        cursor += len;
     }
-    
-    if (cnt > 0) {
-        Assembler_Colis(tmp, cnt);
-    }
+    Assembler_Colis(tmp, cnt);
 }
 
-/* --- MAIN --- */
+/* --- MAIN & MENU --- */
 
 static void Demo_Init(void) {
     Saisir_Produit_Unitaire('A', 1); 
@@ -285,22 +254,13 @@ static void Demo_Init(void) {
     Saisir_Produit_Unitaire('A', 3);
 }
 
-static void Menu_Action(int choice, char* buf) {
-    if (choice == 3) { 
-        Afficher_Log_Alertes(); 
-        return; 
-    }
-    
+static void Lire_Et_Executer(int choice, char* buf) {
+    if (choice == 3) { Afficher_Log_Alertes(); return; }
     (void)printf("Saisie (ex: A1, B2): ");
-    /* Vérification stricte du retour de fgets */
     if (fgets(buf, BUFF_SIZE, stdin) != NULL) {
         buf[strcspn(buf, "\n")] = 0;
-
-        if (choice == 1) {
-            Importer_Paquet_Rapide(buf);
-        } else if (choice == 2) {
-            Traiter_Commande(buf);
-        }
+        if (choice == 1) Importer_Paquet_Rapide(buf);
+        else if (choice == 2) Traiter_Commande(buf);
     }
 }
 
@@ -309,27 +269,24 @@ static void Vider_Buffer_Clavier(void) {
     while ((ch = getchar()) != '\n' && ch != EOF);
 }
 
+static void Gerer_Choix_Menu(int c, char* buf) {
+    if (c != 0) {
+        Vider_Buffer_Clavier();
+        Lire_Et_Executer(c, buf);
+    }
+}
+
 int main(void) {
     int c = 0; 
-    char buf[BUFF_SIZE] = {0}; /* Initialisation à zéro */
-    
+    char buf[BUFF_SIZE] = {0};
     Demo_Init();
-    (void)printf("=== GESTION DE STOCK 2025 (Secure) ===\n");
-    
+    (void)printf("=== GESTION DE STOCK 2025 (Refactored) ===\n");
     do {
         (void)printf("\n1.Ajout 2.Colis 3.Alertes 0.Fin\nChoix: ");
-        
-        if(scanf("%d", &c) == 1 && c != 0) {
-            Vider_Buffer_Clavier();
-            Menu_Action(c, buf);
-        } else {
-             if (c != 0) Vider_Buffer_Clavier();
-        }
-        
+        if(scanf("%d", &c) == 1) Gerer_Choix_Menu(c, buf);
+        else if (c != 0) Vider_Buffer_Clavier();
     } while (c != 0);
-    
-    (void)printf("Arrêt du système. Nettoyage mémoire...\n");
+    (void)printf("Arret. Nettoyage...\n");
     Nettoyer_Memoire();
-    
     return 0;
 }
